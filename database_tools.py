@@ -1,12 +1,11 @@
 import psycopg2
-# bla
 
 class InitTools:
     def __init__(self):
         self.conn = self.create_connection()
         self.cursor = self.conn.cursor()
 
-    def create_initial_tables(self):
+    def create_initial_tables(self, indexing=True):
         '''
         reqires set up Database called Forex_Data which was created in PGAdmin using e.g.
         CREATE DATABASE "Forex_Data"
@@ -16,21 +15,43 @@ class InitTools:
         CONNECTION LIMIT = -1;
         :return: new Tables in Database needed for this project
         '''
-        self.cursor.execute("""CREATE TABLE public.fx_data
-                                (
-                                    fx_timestamp_id integer,
-                                    fx_timestamp character varying(15)
-                                )
-                                WITH (
-                                    OIDS = FALSE
-                                );
-                                
-                                ALTER TABLE public.fx_data
-                                    OWNER to postgres;
-                                ALTER TABLE public.fx_data
-                                    ADD PRIMARY KEY (fx_timestamp_id)
-                            ;""")
-        self.conn.commit()
+        print("setting up initial tables..")
+        try:
+            self.cursor.execute(""" CREATE TABLE public.fx_data
+                                    (
+                                        fx_timestamp_id integer,
+                                        fx_timestamp character varying(15),
+                                        fx_year smallint,
+                                        fx_month smallint,
+                                        fx_day smallint,
+                                        fx_hour smallint,
+                                        fx_minute smallint
+                                    )
+                                    WITH (
+                                        OIDS = FALSE
+                                    );
+
+                                    ALTER TABLE public.fx_data
+                                        OWNER to postgres;
+                                    ALTER TABLE public.fx_data
+                                        ADD PRIMARY KEY (fx_timestamp_id);
+                                    """)
+            self.conn.commit()
+            if indexing == True:
+                self.cursor.execute(""" CREATE INDEX idx_fx_timestamp_id on fx_data ("fx_timestamp_id");
+                                        CREATE INDEX idx_fx_timestamp on fx_data ("fx_timestamp");
+                                        CREATE INDEX idx_fx_year on fx_data ("fx_year");
+                                        CREATE INDEX idx_fx_month on fx_data ("fx_month");
+                                        CREATE INDEX idx_fx_day on fx_data ("fx_day");
+                                        CREATE INDEX idx_fx_hour on fx_data ("fx_hour");
+                                        CREATE INDEX idx_fx_minute on fx_data ("fx_minute");
+                                    """)
+                self.conn.commit()
+                print("tables set with indexes.")
+            else:
+                print("tables set.")
+        except:
+            print("error setting up tables.")
 
 
     def create_connection(self):
@@ -41,8 +62,7 @@ class InitTools:
             password="postgres",
             port="5432")
 
-
-    def timestamp_fill(self, start_year=2000, last_year=2001):
+    def timestamp_fill(self, start_year=2000, last_year=2001, commit_batch_size=50000):
         '''
         makes blablabla
         :param start_year: first years
@@ -90,6 +110,7 @@ class InitTools:
                     minutes.append("0" + str(i))
                 else:
                     minutes.append(str(i))
+
             try:
                 print("start creating timestamps in database...")
                 i = 1
@@ -98,25 +119,52 @@ class InitTools:
                         for day in days:
                             for hour in hours:
                                 for minute in minutes:
-                                    self.cursor.execute(f"""INSERT INTO fx_data
-                                                        (fx_timestamp_id, fx_timestamp)
-                                                        VALUES
-                                                        ({i}, '{year}{month}{day} {hour}{minute}00')""")
+                                    self.cursor.execute(f"""
+                                                INSERT INTO fx_data
+                                                        (fx_timestamp_id, 
+                                                         fx_timestamp, 
+                                                         fx_year,
+                                                         fx_month,
+                                                         fx_day,
+                                                         fx_hour,
+                                                         fx_minute)
+                                                VALUES
+                                                        ({i}, 
+                                                         '{year}{month}{day} {hour}{minute}00',
+                                                         {int(year)}, 
+                                                         {int(month)}, 
+                                                         {int(day)}, 
+                                                         {int(hour)},
+                                                         {int(minute)})"""
+                                                        )
+
                                     i += 1
-                                    if i % 50000 == 0:
+                                    if i % commit_batch_size == 0:
                                         self.conn.commit()
                                     if i % 100000 == 0:
                                         print(f"{year}/{month}. {i} timestamps added. ")
                 self.conn.commit()
-                print(f"finished. {i-1} timestamps added. creating index now...")
-                self.cursor.execute("CREATE UNIQUE INDEX idx_fx_timestamp_id ON fx_data (fx_timestamp_id)")
-                self.cursor.execute("CREATE UNIQUE INDEX idx_fx_timestamp ON fx_data (fx_timestamp)")
+                print(f"finished. {i-1} timestamps added. Updating indexes now...")
+                self.cursor.execute("REINDEX TABLE fx_data;")
                 self.conn.commit()
-                print("Indexes finished.")
+                print("indexes successfully updated.")
+                print("Initial procedure finished.")
             except:
                 print("error adding timestamps")
 
+    def insert_raw_fx_data(self, pairname, csv_folder):
+        '''
+        Inserts all Data from a given (set of) csv(s) in specified folder. CSV Data must have format like Histdata.
+        :param pairname: Name of the eg. Forex pair. must be string of 6 chars, eg. "eurusd".
+        :param csv_folder: Filepath to folder where csv(s) with mentioned data is stored.
+        :return: Creates forex pair related columns & fills them with content from csv(s).
+        '''
+        pass
+
+
 
 if __name__ == "__main__":
-    x = InitTools()
-    x.timestamp_fill(start_year=2000, last_year=2000)
+    # x = InitTools()
+    # x.create_initial_tables()
+    # x.timestamp_fill(start_year=2000, last_year=2000)
+    pass
