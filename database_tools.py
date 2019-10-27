@@ -4,7 +4,6 @@ import os
 import datetime
 
 
-
 class InitTools:
     def __init__(self):
         self.conn = self.create_connection()
@@ -12,13 +11,13 @@ class InitTools:
 
     def create_initial_table(self, indexing=True):
         '''
-        reqires set up Database called Forex_Data which was created in PGAdmin using e.g.
+        requires set up Database called Forex_Data which was created in PGAdmin using in PGadmin Query Tool:
         CREATE DATABASE "Forex_Data"
         WITH
         OWNER = postgres
         ENCODING = 'UTF8'
         CONNECTION LIMIT = -1;
-        :return: new Tables in Database needed for this project
+        :return: initial Tables in Database needed for this project
         '''
         print("setting up initial tables..")
         try:
@@ -59,8 +58,11 @@ class InitTools:
         except:
             print("error setting up tables.")
 
-
     def create_connection(self):
+        '''
+        Simple login to database with psycopg2. Change settings in this function if needed.
+        :return: psycopg2 connection object to create cursor from and commit.
+        '''
         return psycopg2.connect(
             host="127.0.0.1",
             dbname="Forex_Data",
@@ -82,7 +84,7 @@ class InitTools:
         else:
             # set list with range of years
             years = []
-            for i in range(start_year, last_year+1):
+            for i in range(start_year, last_year + 1):
                 years.append(str(i))
 
             # set list of months (1-12)
@@ -159,7 +161,7 @@ class InitTools:
                                     if i % 100000 == 0:
                                         print(f"{year}/{month}. {i} timestamps added. ")
                 self.conn.commit()
-                print(f"finished. {i-1} timestamps added. Updating indexes now...")
+                print(f"finished. {i - 1} timestamps added. Updating indexes now...")
                 self.cursor.execute("REINDEX TABLE fx_data;")
                 self.conn.commit()
                 print("indexes successfully updated.")
@@ -174,6 +176,7 @@ class InitTools:
         :param indexing: Boolean, if true, index on new columns is added. Default true.
         :return: new tables in database to be filled with raw forex data.
         '''
+
         print(f"adding Columns for {pair_name}..")
         self.cursor.execute(f"""ALTER TABLE fx_data
                                 ADD COLUMN {pair_name}_bidopen double precision,
@@ -194,9 +197,7 @@ class InitTools:
             self.conn.commit()
             print("Indexes added.")
 
-
-
-    def insert_raw_fx_data(self, pairname, csv_folder, commit_batch_size=25000):
+    def update_raw_fx_data(self, pairname, csv_folder, commit_batch_size=25000):
         '''
         Inserts all Data from a given (set of) csv(s) in specified folder. CSV Data must have format like Histdata.
         :param pairname: Name of forex pair. must be string of 6 chars, eg. "eurusd".
@@ -205,6 +206,7 @@ class InitTools:
         :param commit_batch_size: Number of ohlc-lines to be stored before commiting to database, less commits -> faster.
         :return: Creates forex pair related columns & fills them with content from csv(s).
         '''
+
         print(f"Start adding files from directory {csv_folder} as {pairname} values..")
         files = os.listdir(csv_folder)
         for file in files:
@@ -229,17 +231,62 @@ class InitTools:
                         print(f"{i} ohlc-lines added..")
                 self.conn.commit()
                 print(f"file {file} finished.")
-        print(f"All files from {filepath} added as {pairname} values.")
+        print(f"All files from {csv_folder} added as {pairname} values.")
         print("reindexing...")
         self.cursor.execute("REINDEX TABLE fx_data")
-        print("finished")
+        print("reindexing finished. Updating nonvalid_count now..")
 
+    def fill_nonvalid_count(self, pairname):
+        '''
+        Fills the nonvalid count column in database. Start at first row with valid data, end at last row with valid data.
+        :param pairname: Name of forex pair. must be string of 6 chars, eg. "eurusd".
+        :return: [pairname]_nonvalid_count filled in database.
+        '''
+
+        # start point determination, 'first row of where data acutally is', lower limit
+        self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
+                                ORDER BY fx_timestamp_id ASC LIMIT 1""")
+        lower_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
+
+        # end point determination, 'last row where data actually is', upper limit
+        self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
+                                ORDER BY fx_timestamp_id DESC LIMIT 1""")
+        upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
+
+
+        stop = False
+        i = 0
+        while stop == False:
+
+            self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_nonvalid_count is NULL 
+                                    AND fx_timestamp_id between {lower_limit} AND {upper_limit} 
+                                    ORDER BY fx_timestamp_id ASC LIMIT 1""")
+            current_id = self.cursor.fetchall()
+
+            if current_id == []:  # check if output from fetch valid, eg. [(...,)], if not (=[]), stop.
+                stop = True
+
+            else:
+                current_id = current_id[0][0]
+                self.cursor.execute(f"""SELECT fx_timestamp_id from fx_data
+                                        WHERE fx_timestamp_id > {current_id} AND {pairname}_nonvalid_count = 0
+                                        ORDER BY fx_timestamp_id ASC LIMIT 1""")
+                next_valid = self.cursor.fetchall()[0][0]
+                j = 1  # nonvalid field counter
+                for k in range(current_id, next_valid):
+                    self.cursor.execute(f"""UPDATE fx_data SET {pairname}_nonvalid_count = {j}
+                                            WHERE fx_timestamp_id = {k}""")
+                    j += 1
+                    i += 1
+                self.conn.commit()
+
+        print(f"Nonvalid count procedure completed. {i} empty {pairname} lines detected and marked.")
 
 
 if __name__ == "__main__":
-    # x = InitTools()
-    # x.create_initial_table()
-    # x.timestamp_fill(start_year=2000, last_year=2001)
-    # x.create_forex_tables("eurusd")
-    # x.insert_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
-    pass
+    x = InitTools()
+    x.create_initial_table()
+    x.timestamp_fill(start_year=2000, last_year=2020)
+    x.create_forex_tables("eurusd")
+    x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
+    x.fill_nonvalid_count("eurusd")
