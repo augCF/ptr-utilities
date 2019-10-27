@@ -11,7 +11,9 @@ class InitTools:
 
     def create_initial_table(self, indexing=True):
         '''
-        requires set up Database called Forex_Data which was created in PGAdmin using in PGadmin Query Tool:
+        Creates initial Table and Columns of databased. These are used in this Project. Shall be executed only
+        one time. Prerequisite for further work with database. Requires set up Database called Forex_Data which was
+        created in PGAdmin using in PGadmin Query Tool:
         CREATE DATABASE "Forex_Data"
         WITH
         OWNER = postgres
@@ -52,9 +54,9 @@ class InitTools:
                                         CREATE INDEX idx_fx_minute on fx_data ("fx_minute");
                                     """)
                 self.conn.commit()
-                print("tables set with indexes.")
+                print("table set with indexes.")
             else:
-                print("tables set.")
+                print("table set.")
         except:
             print("error setting up tables.")
 
@@ -72,7 +74,9 @@ class InitTools:
 
     def timestamp_fill(self, start_year=2000, last_year=2001, commit_batch_size=50000):
         '''
-        makes blablabla
+        Fills fx_timestamp and fx_timestamp_id column of database. Prerequisite for further work with database.
+        Requires set up Database with initial tables/columns (use create_initial_tables). Shall be executed only one
+        time. Set start_year and last_year with enough space for extension, eg. last_year = 2025.
         :param start_year: first years
         :param last_year: last year to be filled
         :return: filled database
@@ -169,7 +173,7 @@ class InitTools:
             except:
                 print("error adding timestamps")
 
-    def create_forex_tables(self, pair_name, indexing=True):
+    def create_forex_columns(self, pair_name, indexing=True):
         '''
         Creates the tables required for filling raw data of specified forex pair in database.
         :param pair_name: Name of forex pair. must be string of 6 chars, eg. "eurusd".
@@ -282,11 +286,62 @@ class InitTools:
 
         print(f"Nonvalid count procedure completed. {i} empty {pairname} lines detected and marked.")
 
+    def fill_empty_fx_rows(self, pairname):
+        '''
+
+        :param pairname:
+        :return:
+        '''
+        # select empty row id (nonvalid)
+        # select previous bidclose
+
+
+class IndicatorTools:
+
+    def __init__(self):
+        self.InitToolsObject = InitTools()
+        self.conn = self.InitToolsObject.create_connection()
+        self.cursor = self.conn.cursor()
+
+    def create_indicator_columns(self, pairname, indexing=True):
+        '''
+        Creates the coulumns for indicator values of specified forex pair in database.
+        :param pairname: Name of forex pair. must be string of 6 chars, eg. "eurusd".
+        :param indexing: Boolean, if true, index on new columns is added. Defaults to true.
+        :return: new tables in database to be filled with indicator values.
+        '''
+
+        print(f"adding Columns for {pairname}..")
+        self.cursor.execute(f"""ALTER TABLE fx_data
+                                    ADD COLUMN {pairname}_up_down_candle smallint
+                                    ;""")
+        self.conn.commit()
+        print("Columns added.")
+
+        if indexing == True:
+            print(f"adding Indexes on {pairname} tables..")
+            self.cursor.execute(f"""CREATE INDEX idx_{pairname}_up_down_canlde on fx_data ("{pairname}_up_down_candle");
+                                """)
+            self.conn.commit()
+            print("Indexes added.")
+
+    def fill_indicator_value(self, pairname, indicator):
+        pass
+
+        # Column up_down,
+        # this indicators for 6, 12, 24, 48, 96, ... :
+        # RSI
+        # EWMA
+        # MACD's (normalized or not?)
+        # Momentum (normalized or not?)
+        # ADX
+
 
 if __name__ == "__main__":
-    x = InitTools()
-    x.create_initial_table()
-    x.timestamp_fill(start_year=2000, last_year=2020)
-    x.create_forex_tables("eurusd")
-    x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
-    x.fill_nonvalid_count("eurusd")
+    pass
+    # x = InitTools()
+    # x.create_initial_table()
+    # x.timestamp_fill(start_year=2000, last_year=2020)
+    # x.create_forex_columns("eurusd")
+    # x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
+    # x.fill_nonvalid_count("eurusd")
