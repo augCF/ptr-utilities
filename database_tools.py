@@ -1,11 +1,16 @@
 import psycopg2
+import csv
+import os
+import datetime
+
+
 
 class InitTools:
     def __init__(self):
         self.conn = self.create_connection()
         self.cursor = self.conn.cursor()
 
-    def create_initial_tables(self, indexing=True):
+    def create_initial_table(self, indexing=True):
         '''
         reqires set up Database called Forex_Data which was created in PGAdmin using e.g.
         CREATE DATABASE "Forex_Data"
@@ -24,6 +29,7 @@ class InitTools:
                                         fx_year smallint,
                                         fx_month smallint,
                                         fx_day smallint,
+                                        fx_weekday smallint,
                                         fx_hour smallint,
                                         fx_minute smallint
                                     )
@@ -117,6 +123,13 @@ class InitTools:
                 for year in years:
                     for month in months:
                         for day in days:
+
+                            try:
+                                weekday = datetime.datetime(int(year), int(month), int(day))
+                                weekday = int(datetime.datetime.weekday(weekday))
+                            except:
+                                weekday = "NULL"
+
                             for hour in hours:
                                 for minute in minutes:
                                     self.cursor.execute(f"""
@@ -126,6 +139,7 @@ class InitTools:
                                                          fx_year,
                                                          fx_month,
                                                          fx_day,
+                                                         fx_weekday,
                                                          fx_hour,
                                                          fx_minute)
                                                 VALUES
@@ -133,7 +147,8 @@ class InitTools:
                                                          '{year}{month}{day} {hour}{minute}00',
                                                          {int(year)}, 
                                                          {int(month)}, 
-                                                         {int(day)}, 
+                                                         {int(day)},
+                                                         {weekday}, 
                                                          {int(hour)},
                                                          {int(minute)})"""
                                                         )
@@ -152,19 +167,79 @@ class InitTools:
             except:
                 print("error adding timestamps")
 
-    def insert_raw_fx_data(self, pairname, csv_folder):
+    def create_forex_tables(self, pair_name, indexing=True):
+        '''
+        Creates the tables required for filling raw data of specified forex pair in database.
+        :param pair_name: Name of forex pair. must be string of 6 chars, eg. "eurusd".
+        :param indexing: Boolean, if true, index on new columns is added. Default true.
+        :return: new tables in database to be filled with raw forex data.
+        '''
+        print(f"adding Columns for {pair_name}..")
+        self.cursor.execute(f"""ALTER TABLE fx_data
+                                ADD COLUMN {pair_name}_bidopen double precision,
+                                ADD COLUMN {pair_name}_bidhigh double precision,
+                                ADD COLUMN {pair_name}_bidlow double precision,
+                                ADD COLUMN {pair_name}_bidclose double precision,
+                                ADD COLUMN {pair_name}_nonvalid_count integer;""")
+        self.conn.commit()
+        print("Columns added.")
+        if indexing == True:
+            print(f"adding Indexes on {pair_name} tables..")
+            self.cursor.execute(
+                f"""CREATE INDEX idx_{pair_name}_bidopen on fx_data ("{pair_name}_bidopen");
+                    CREATE INDEX idx_{pair_name}_bidhigh on fx_data ("{pair_name}_bidhigh");
+                    CREATE INDEX idx_{pair_name}_bidlow on fx_data ("{pair_name}_bidlow");
+                    CREATE INDEX idx_{pair_name}_bidclose on fx_data ("{pair_name}_bidclose");
+                    CREATE INDEX idx_{pair_name}_nonvalid_count on fx_data ("{pair_name}_nonvalid_count");""")
+            self.conn.commit()
+            print("Indexes added.")
+
+
+
+    def insert_raw_fx_data(self, pairname, csv_folder, commit_batch_size=25000):
         '''
         Inserts all Data from a given (set of) csv(s) in specified folder. CSV Data must have format like Histdata.
-        :param pairname: Name of the eg. Forex pair. must be string of 6 chars, eg. "eurusd".
-        :param csv_folder: Filepath to folder where csv(s) with mentioned data is stored.
+        :param pairname: Name of forex pair. must be string of 6 chars, eg. "eurusd".
+        :param csv_folder: Filepath to folder where csv(s) with mentioned data is stored. Replace all "\" with "//"
+                            and delete final "//". Eg: 'C://Users//howard//datasets//eurusd'
+        :param commit_batch_size: Number of ohlc-lines to be stored before commiting to database, less commits -> faster.
         :return: Creates forex pair related columns & fills them with content from csv(s).
         '''
-        pass
+        print(f"Start adding files from directory {csv_folder} as {pairname} values..")
+        files = os.listdir(csv_folder)
+        for file in files:
+            print(f"file {file} is being added..")
+            filepath = csv_folder + "//" + file
+            with open(filepath, mode="r") as open_file:
+                read_csv = csv.reader(open_file, delimiter=";")
+                i = 0
+                for line in read_csv:
+                    self.cursor.execute(f"""UPDATE fx_data SET
+                                            {pairname}_bidopen = {line[1]},
+                                            {pairname}_bidhigh = {line[2]},
+                                            {pairname}_bidlow = {line[3]},
+                                            {pairname}_bidclose = {line[4]},
+                                            {pairname}_nonvalid_count = 0
+                                            WHERE
+                                            fx_timestamp = '{line[0]}'""")
+                    i += 1
+                    if i % commit_batch_size == 0:
+                        self.conn.commit()
+                    if i % 100000 == 0:
+                        print(f"{i} ohlc-lines added..")
+                self.conn.commit()
+                print(f"file {file} finished.")
+        print(f"All files from {filepath} added as {pairname} values.")
+        print("reindexing...")
+        self.cursor.execute("REINDEX TABLE fx_data")
+        print("finished")
 
 
 
 if __name__ == "__main__":
     # x = InitTools()
-    # x.create_initial_tables()
-    # x.timestamp_fill(start_year=2000, last_year=2000)
+    # x.create_initial_table()
+    # x.timestamp_fill(start_year=2000, last_year=2001)
+    # x.create_forex_tables("eurusd")
+    # x.insert_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
     pass
