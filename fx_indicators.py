@@ -6,40 +6,47 @@ class DatabaseIndicators:
     Indicators to fill database with. Each Indicator inputs forex pair name, timestamp ID. Outputs Indicator value
     for given timestamp ID.
     '''
-    def __init__(self, pairname, windowsize, timestamp_id):
+    def __init__(self, pairname, windowsize, timestamp_ids):
         self.InitToolsObject = InitTools()
         self.conn = self.InitToolsObject.create_connection()
         self.cursor = self.conn.cursor()
         self.pairname = pairname
         self.windowsize = windowsize
-        self.timestamp_id = timestamp_id
+        self.timestamp_ids = timestamp_ids
 
 
     def up_down(self):
         '''
         Indicates whether selected candle has an downwards direction (=0, open bid is higher than close bid),
         no direction (=1, open bid and close bid are equal) or an upwards direction (=2, open bid is lower than
-        close bid). Needed for eg. RSI determination or other database indicators.
-        :param pairname: Name of forex pair. must be string of 6 chars, eg. "eurusd".
-        :param timestamp_id: Valid ID within fx_timestamp_id.
+        close bid). Needed for eg. RSI determination or other database not yet defined indicators.
         :return: Integer with value 0, 1, or 2.
         '''
 
         try:
             self.cursor.execute(f"""SELECT {self.pairname}_bidopen, {self.pairname}_bidclose FROM fx_data 
-                                where fx_timestamp_id = {self.timestamp_id}""")
-            open_close_values = self.cursor.fetchall()[0]
+                                WHERE fx_timestamp_id BETWEEN {self.timestamp_ids[0]} AND {self.timestamp_ids[-1]}""")
+            open_close_values = self.cursor.fetchall()
 
-            if open_close_values[0] > open_close_values[1]:
-                return 0
-            elif open_close_values[0] == open_close_values[1]:
-                return 1
-            elif open_close_values[0] < open_close_values[1]:
-                return 2
-            else:
-                print(f"up / down values couldnt be determined for {self.pairname} at {self.timestamp_id}")
+            output = []
+            for i in range(len(self.timestamp_ids)):
+                if open_close_values[i][0] > open_close_values[i][1]:
+                    output.append(0)
+                elif open_close_values[i][0] == open_close_values[i][1]:
+                    output.append(1)
+                elif open_close_values[i][0] < open_close_values[i][1]:
+                    output.append(2)
+            return output
+
         except:
             pass
+
+    def rsi(self):
+        '''
+        Welles Wilders
+        :return:
+        '''
+
 
 
 
