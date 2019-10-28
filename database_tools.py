@@ -257,7 +257,6 @@ class InitTools:
                                 ORDER BY fx_timestamp_id DESC LIMIT 1""")
         upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
 
-
         stop = False
         i = 0
         while stop == False:
@@ -292,8 +291,55 @@ class InitTools:
         :param pairname:
         :return:
         '''
-        # select empty row id (nonvalid)
-        # select previous bidclose
+        print(f"Start filling empty fx rows of {pairname}..")
+        # start point determination, 'first row of where data acutally is', lower limit
+        self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
+                                ORDER BY fx_timestamp_id ASC LIMIT 1""")
+        lower_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
+
+        # end point determination, 'last row where data actually is', upper limit
+        self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
+                                ORDER BY fx_timestamp_id DESC LIMIT 1""")
+        upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
+
+        stop = False
+        i = 0
+        while stop == False:
+
+            self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen is NULL 
+                                    AND fx_timestamp_id between {lower_limit} AND {upper_limit} 
+                                    ORDER BY fx_timestamp_id ASC LIMIT 1""")
+            current_id = self.cursor.fetchall()
+
+            if current_id == []:  # check if output from fetch valid, eg. [(...,)], if not (=[]), stop.
+                stop = True
+
+            else:
+                current_id = current_id[0][0]
+                self.cursor.execute(f"""SELECT {pairname}_bidclose FROM fx_data 
+                                        WHERE fx_timestamp_id = {current_id - 1}""")
+                last_bidclose = self.cursor.fetchall()[0][0]
+
+                self.cursor.execute(f"""SELECT fx_timestamp_id from fx_data
+                                        WHERE fx_timestamp_id > {current_id} AND {pairname}_bidopen IS NOT NULL
+                                        ORDER BY fx_timestamp_id ASC LIMIT 1""")
+                next_valid = self.cursor.fetchall()[0][0]
+
+                j = 1  # empty field counter
+                for k in range(current_id, next_valid):
+                    self.cursor.execute(f"""UPDATE fx_data SET 
+                                                    {pairname}_bidopen = {last_bidclose},
+                                                    {pairname}_bidhigh = {last_bidclose},
+                                                    {pairname}_bidlow = {last_bidclose},
+                                                    {pairname}_bidclose = {last_bidclose}
+                                            WHERE fx_timestamp_id = {k}""")
+                    j += 1
+                    i += 1
+                    if i % 5000 == 0:
+                        print(f"current id: {current_id}. rows filled: {i}. left to check: {upper_limit - current_id}")
+                self.conn.commit()
+
+        print(f"Fill empty rows procedure completed. {i} empty {pairname} rows detected and filled with last bidclose.")
 
 
 class IndicatorTools:
@@ -313,20 +359,66 @@ class IndicatorTools:
 
         print(f"adding Columns for {pairname}..")
         self.cursor.execute(f"""ALTER TABLE fx_data
-                                    ADD COLUMN {pairname}_up_down_candle smallint
+                                    ADD COLUMN {pairname}_up_down_0 smallint
                                     ;""")
         self.conn.commit()
         print("Columns added.")
 
         if indexing == True:
             print(f"adding Indexes on {pairname} tables..")
-            self.cursor.execute(f"""CREATE INDEX idx_{pairname}_up_down_canlde on fx_data ("{pairname}_up_down_candle");
+            self.cursor.execute(f"""CREATE INDEX idx_{pairname}_up_down_0 on fx_data ("{pairname}_up_down_0");
                                 """)
             self.conn.commit()
             print("Indexes added.")
 
-    def fill_indicator_value(self, pairname, indicator):
-        pass
+    def fill_indicator_value(self, pairname, indicator, windowsize):
+        '''
+
+        :param pairname:
+        :param indicator:
+        :param windowsize:
+        :return:
+        '''
+        print(f"Start filling {pairname} {indicator} {windowsize} values")
+        # start point determination, 'first row of where data acutally is', lower limit
+        self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
+                                AND {pairname}_{indicator}_{windowsize} IS NULL 
+                                ORDER BY fx_timestamp_id ASC LIMIT 1""")
+        lower_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
+
+        # end point determination, 'last row where data actually is', upper limit
+        self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
+                                ORDER BY fx_timestamp_id DESC LIMIT 1""")
+        upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
+
+        current_id = lower_limit + windowsize
+
+        if current_id > upper_limit:
+            print("Error, filling Indicator Value not possible.")
+
+        else:
+            from fx_indicators import DatabaseIndicators as di
+
+            if indicator == "up_down":
+                while current_id <= upper_limit:
+                    self.cursor.execute(f"""UPDATE fx_data SET 
+                                        {pairname}_{indicator}_{windowsize} = {di(pairname, windowsize, current_id).up_down()} 
+                                        WHERE fx_timestamp_id = {current_id}""")
+                    current_id += 1
+                    if current_id % 100 == 0:
+                        self.conn.commit()
+                        print(f"current id: {current_id}. {upper_limit - current_id} left..")
+                self.conn.commit()
+
+            elif indicator == "rsi":
+                pass
+
+            elif indicator == "emwa":
+                pass
+
+            else:
+                print("Indicator name not defined.")
+
 
         # Column up_down,
         # this indicators for 6, 12, 24, 48, 96, ... :
@@ -338,10 +430,14 @@ class IndicatorTools:
 
 
 if __name__ == "__main__":
-    pass
-    # x = InitTools()
+    x = InitTools()
+    y = IndicatorTools()
     # x.create_initial_table()
     # x.timestamp_fill(start_year=2000, last_year=2020)
     # x.create_forex_columns("eurusd")
     # x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
     # x.fill_nonvalid_count("eurusd")
+    x.fill_empty_fx_rows("eurusd")
+    # y.create_indicator_columns("eurusd")
+
+    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", windowsize=0)
