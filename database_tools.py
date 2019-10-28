@@ -359,7 +359,8 @@ class IndicatorTools:
 
         print(f"adding Columns for {pairname}..")
         self.cursor.execute(f"""ALTER TABLE fx_data
-                                    ADD COLUMN {pairname}_up_down_0 smallint
+                                    ADD COLUMN {pairname}_up_down_0 smallint;
+                                    ADD COLUMN {pairname}_rsi_6
                                     ;""")
         self.conn.commit()
         print("Columns added.")
@@ -371,13 +372,15 @@ class IndicatorTools:
             self.conn.commit()
             print("Indexes added.")
 
-    def fill_indicator_value(self, pairname, indicator, windowsize):
+    def fill_indicator_value(self, pairname, indicator, windowsize, batchsize):
         '''
-
-        :param pairname:
-        :param indicator:
-        :param windowsize:
-        :return:
+        Fills respective Indicator Column. Prerequisites non-empty fx rows within start and end of valid data, use
+        fill_empty_fx_rows first otherwise error will be raised.
+        :param pairname: Name of forex pair. must be string of 6 chars, eg. "eurusd".
+        :param indicator: String out of list of Indicators, eg. "up_down" or "rsi"
+        :param windowsize: Windowsize of Indicator, eg. RSI Period. Has no effect on "up_down".
+        :param batchsize: Size of Batch to be processed at once, eg. 50000 or more. Bigger is better.
+        :return: Filled indicator column in Database.
         '''
         print(f"Start filling {pairname} {indicator} {windowsize} values")
         # start point determination, 'first row of where data acutally is', lower limit
@@ -391,33 +394,41 @@ class IndicatorTools:
                                 ORDER BY fx_timestamp_id DESC LIMIT 1""")
         upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
 
-        current_id = lower_limit + windowsize
+        start_id = lower_limit + windowsize
 
-        if current_id > upper_limit:
-            print("Error, filling Indicator Value not possible.")
+        if start_id > upper_limit:
+            print("Error, filling Indicator Value not possible. Check window size and upper limit.")
 
         else:
             from fx_indicators import DatabaseIndicators as di
 
-            if indicator == "up_down":
-                while current_id <= upper_limit:
+
+            current_id = start_id
+
+            while current_id <= upper_limit:
+
+                if upper_limit - current_id <= batchsize:
+                    id_batch = [x for x in range(current_id, upper_limit + 1)]
+                    print("reaching end...")
+                else:
+                    id_batch = [x for x in range(current_id, current_id + batchsize + 1)]
+
+                if indicator == "up_down":
+                    indicator_value_batch = di(pairname, windowsize, id_batch).up_down()
+                elif indicator == "rsi":
+                    indicator_value_batch = di(pairname, windowsize, id_batch).rsi()
+                else:
+                    print("Indicator name not defined.")
+
+                for i in range(len(id_batch)):
                     self.cursor.execute(f"""UPDATE fx_data SET 
-                                        {pairname}_{indicator}_{windowsize} = {di(pairname, windowsize, current_id).up_down()} 
-                                        WHERE fx_timestamp_id = {current_id}""")
-                    current_id += 1
-                    if current_id % 100 == 0:
-                        self.conn.commit()
-                        print(f"current id: {current_id}. {upper_limit - current_id} left..")
+                                    {pairname}_{indicator}_{windowsize} = {indicator_value_batch[i]} 
+                                    WHERE fx_timestamp_id = {id_batch[i]}""")
+                current_id += batchsize
+
                 self.conn.commit()
-
-            elif indicator == "rsi":
-                pass
-
-            elif indicator == "emwa":
-                pass
-
-            else:
-                print("Indicator name not defined.")
+                print(f"current id: {current_id}. {upper_limit - current_id} left..")
+            self.conn.commit()
 
 
         # Column up_down,
@@ -440,4 +451,4 @@ if __name__ == "__main__":
     x.fill_empty_fx_rows("eurusd")
     # y.create_indicator_columns("eurusd")
 
-    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", windowsize=0)
+    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", windowsize=0, batchsize=100)
