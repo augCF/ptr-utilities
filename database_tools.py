@@ -2,6 +2,8 @@ import psycopg2
 import csv
 import os
 import datetime
+import pandas as pd
+import numpy as np
 
 
 class InitTools:
@@ -238,54 +240,10 @@ class InitTools:
         print(f"All files from {csv_folder} added as {pairname} values.")
         print("reindexing...")
         self.cursor.execute("REINDEX TABLE fx_data")
-        print("reindexing finished. Updating nonvalid_count now..")
+        print("reindexing finished.")
 
-    def fill_nonvalid_count(self, pairname):
-        '''
-        Fills the nonvalid count column in database. Start at first row with valid data, end at last row with valid data.
-        :param pairname: Name of forex pair. must be string of 6 chars, eg. "eurusd".
-        :return: [pairname]_nonvalid_count filled in database.
-        '''
 
-        # start point determination, 'first row of where data acutally is', lower limit
-        self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
-                                ORDER BY fx_timestamp_id ASC LIMIT 1""")
-        lower_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
-
-        # end point determination, 'last row where data actually is', upper limit
-        self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
-                                ORDER BY fx_timestamp_id DESC LIMIT 1""")
-        upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
-
-        stop = False
-        i = 0
-        while stop == False:
-
-            self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_nonvalid_count is NULL 
-                                    AND fx_timestamp_id between {lower_limit} AND {upper_limit} 
-                                    ORDER BY fx_timestamp_id ASC LIMIT 1""")
-            current_id = self.cursor.fetchall()
-
-            if current_id == []:  # check if output from fetch valid, eg. [(...,)], if not (=[]), stop.
-                stop = True
-
-            else:
-                current_id = current_id[0][0]
-                self.cursor.execute(f"""SELECT fx_timestamp_id from fx_data
-                                        WHERE fx_timestamp_id > {current_id} AND {pairname}_nonvalid_count = 0
-                                        ORDER BY fx_timestamp_id ASC LIMIT 1""")
-                next_valid = self.cursor.fetchall()[0][0]
-                j = 1  # nonvalid field counter
-                for k in range(current_id, next_valid):
-                    self.cursor.execute(f"""UPDATE fx_data SET {pairname}_nonvalid_count = {j}
-                                            WHERE fx_timestamp_id = {k}""")
-                    j += 1
-                    i += 1
-                self.conn.commit()
-
-        print(f"Nonvalid count procedure completed. {i} empty {pairname} lines detected and marked.")
-
-    def fill_empty_fx_rows(self, pairname):
+    def fill_empty_fx_rows(self, pairname, batchsize):
         '''
 
         :param pairname:
@@ -302,44 +260,49 @@ class InitTools:
                                 ORDER BY fx_timestamp_id DESC LIMIT 1""")
         upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
 
-        stop = False
-        i = 0
-        while stop == False:
+        finished = False
+        counter = 0
+        while finished == False:
 
-            self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen is NULL 
-                                    AND fx_timestamp_id between {lower_limit} AND {upper_limit} 
+            # mid point determination, 'last row before first empty row'
+            self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data
+                                    WHERE fx_timestamp_id > {lower_limit}
+                                    AND {pairname}_bidopen IS NULL
                                     ORDER BY fx_timestamp_id ASC LIMIT 1""")
-            current_id = self.cursor.fetchall()
+            current_id = self.cursor.fetchall()[0][0] - 1
 
-            if current_id == []:  # check if output from fetch valid, eg. [(...,)], if not (=[]), stop.
-                stop = True
-
+            if upper_limit - current_id <= batchsize:
+                query = f"SELECT fx_timestamp_id, {pairname}_bidclose FROM fx_data " \
+                        f"WHERE fx_timestamp_id BETWEEN {current_id} AND {upper_limit}" \
+                        f"ORDER BY fx_timestamp_id ASC"
             else:
-                current_id = current_id[0][0]
-                self.cursor.execute(f"""SELECT {pairname}_bidclose FROM fx_data 
-                                        WHERE fx_timestamp_id = {current_id - 1}""")
-                last_bidclose = self.cursor.fetchall()[0][0]
+                query = f"SELECT fx_timestamp_id, {pairname}_bidclose FROM fx_data " \
+                        f"WHERE fx_timestamp_id BETWEEN {current_id} AND {current_id + batchsize}" \
+                        f"ORDER BY fx_timestamp_id ASC"
 
-                self.cursor.execute(f"""SELECT fx_timestamp_id from fx_data
-                                        WHERE fx_timestamp_id > {current_id} AND {pairname}_bidopen IS NOT NULL
-                                        ORDER BY fx_timestamp_id ASC LIMIT 1""")
-                next_valid = self.cursor.fetchall()[0][0]
+            fetch = pd.read_sql_query(query, self.conn)
 
-                j = 1  # empty field counter
-                for k in range(current_id, next_valid):
+            nan_count = 0
+            for i in range(len(fetch)):
+                if np.isnan(fetch.at[i, f"{pairname}_bidclose"]):
+                    nan_count += 1
                     self.cursor.execute(f"""UPDATE fx_data SET 
-                                                    {pairname}_bidopen = {last_bidclose},
-                                                    {pairname}_bidhigh = {last_bidclose},
-                                                    {pairname}_bidlow = {last_bidclose},
-                                                    {pairname}_bidclose = {last_bidclose}
-                                            WHERE fx_timestamp_id = {k}""")
-                    j += 1
-                    i += 1
-                    if i % 5000 == 0:
-                        print(f"current id: {current_id}. rows filled: {i}. left to check: {upper_limit - current_id}")
-                self.conn.commit()
+                                            {pairname}_bidopen = {fetch.at[i - nan_count,f"{pairname}_bidclose"]},
+                                            {pairname}_bidhigh = {fetch.at[i - nan_count,f"{pairname}_bidclose"]},
+                                            {pairname}_bidlow = {fetch.at[i - nan_count,f"{pairname}_bidclose"]},
+                                            {pairname}_bidclose = {fetch.at[i - nan_count,f"{pairname}_bidclose"]},
+                                            {pairname}_nonvalid_count = {nan_count}
+                                            WHERE fx_timestamp_id = {fetch.at[i, "fx_timestamp_id"]}""")
+                    counter += 1
+                else:
+                    nan_count = 0
 
-        print(f"Fill empty rows procedure completed. {i} empty {pairname} rows detected and filled with last bidclose.")
+                if current_id == upper_limit:
+                    finished = True
+                    break
+            print(f"current id: {current_id}. {upper_limit - current_id} left.")
+            self.conn.commit()
+        print(f"Fill empty rows procedure completed. {counter} empty {pairname} rows detected and filled with last bidclose.")
 
 
 class IndicatorTools:
@@ -359,9 +322,9 @@ class IndicatorTools:
 
         print(f"adding Columns for {pairname}..")
         self.cursor.execute(f"""ALTER TABLE fx_data
-                                    ADD COLUMN {pairname}_up_down_0 smallint;
-                                    ADD COLUMN {pairname}_rsi_6
-                                    ;""")
+                                    ADD COLUMN {pairname}_up_down_0 smallint,
+                                    ADD COLUMN {pairname}_rsi_6 smallint;
+                                    """)
         self.conn.commit()
         print("Columns added.")
 
@@ -382,12 +345,19 @@ class IndicatorTools:
         :param batchsize: Size of Batch to be processed at once, eg. 50000 or more. Bigger is better.
         :return: Filled indicator column in Database.
         '''
+
         print(f"Start filling {pairname} {indicator} {windowsize} values")
+
         # start point determination, 'first row of where data acutally is', lower limit
         self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
                                 AND {pairname}_{indicator}_{windowsize} IS NULL 
                                 ORDER BY fx_timestamp_id ASC LIMIT 1""")
-        lower_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
+        lower_limit = self.cursor.fetchall()
+        if lower_limit == []:                   # check if there is actually sth to do
+            print("already finished, nothing to fill")
+            return None
+        else:
+            lower_limit = lower_limit[0][0]     # -> Because fetchall outputs sth. like this: [(blabla,)]
 
         # end point determination, 'last row where data actually is', upper limit
         self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
@@ -424,31 +394,23 @@ class IndicatorTools:
                     self.cursor.execute(f"""UPDATE fx_data SET 
                                     {pairname}_{indicator}_{windowsize} = {indicator_value_batch[i]} 
                                     WHERE fx_timestamp_id = {id_batch[i]}""")
-                current_id += batchsize
 
                 self.conn.commit()
                 print(f"current id: {current_id}. {upper_limit - current_id} left..")
+                current_id += batchsize
+
             self.conn.commit()
+            print(f"Indicator {indicator} for {pairname} finished.")
 
-
-        # Column up_down,
-        # this indicators for 6, 12, 24, 48, 96, ... :
-        # RSI
-        # EWMA
-        # MACD's (normalized or not?)
-        # Momentum (normalized or not?)
-        # ADX
 
 
 if __name__ == "__main__":
     x = InitTools()
     y = IndicatorTools()
     # x.create_initial_table()
-    # x.timestamp_fill(start_year=2000, last_year=2020)
+    # x.timestamp_fill(start_year=2000, last_year=2000, commit_batch_size=150000)
     # x.create_forex_columns("eurusd")
     # x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
-    # x.fill_nonvalid_count("eurusd")
-    x.fill_empty_fx_rows("eurusd")
+    # x.fill_empty_fx_rows("eurusd", 100000)
     # y.create_indicator_columns("eurusd")
-
-    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", windowsize=0, batchsize=100)
+    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", windowsize=0, batchsize=100000)
