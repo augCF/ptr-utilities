@@ -4,6 +4,7 @@ import os
 import datetime
 import pandas as pd
 import numpy as np
+import time
 
 
 class InitTools:
@@ -185,10 +186,10 @@ class InitTools:
 
         print(f"adding Columns for {pair_name}..")
         self.cursor.execute(f"""ALTER TABLE fx_data
-                                ADD COLUMN {pair_name}_bidopen double precision,
-                                ADD COLUMN {pair_name}_bidhigh double precision,
-                                ADD COLUMN {pair_name}_bidlow double precision,
-                                ADD COLUMN {pair_name}_bidclose double precision,
+                                ADD COLUMN {pair_name}_bidopen NUMERIC(6,5),
+                                ADD COLUMN {pair_name}_bidhigh NUMERIC(6,5),
+                                ADD COLUMN {pair_name}_bidlow NUMERIC(6,5),
+                                ADD COLUMN {pair_name}_bidclose NUMERIC(6,5),
                                 ADD COLUMN {pair_name}_nonvalid_count integer;""")
         self.conn.commit()
         print("Columns added.")
@@ -222,19 +223,24 @@ class InitTools:
                 read_csv = csv.reader(open_file, delimiter=";")
                 i = 0
                 for line in read_csv:
-                    self.cursor.execute(f"""UPDATE fx_data SET
-                                            {pairname}_bidopen = {line[1]},
-                                            {pairname}_bidhigh = {line[2]},
-                                            {pairname}_bidlow = {line[3]},
-                                            {pairname}_bidclose = {line[4]},
-                                            {pairname}_nonvalid_count = 0
-                                            WHERE
-                                            fx_timestamp = '{line[0]}'""")
+                    try:
+                        self.cursor.execute(f"""UPDATE fx_data SET
+                                                {pairname}_bidopen = {np.around(float(line[1]), decimals=5)},
+                                                {pairname}_bidhigh = {np.around(float(line[2]), decimals=5)},
+                                                {pairname}_bidlow = {np.around(float(line[3]), decimals=5)},
+                                                {pairname}_bidclose = {np.around(float(line[4]), decimals=5)},
+                                                {pairname}_nonvalid_count = 0
+                                                WHERE
+                                                fx_timestamp = '{line[0]}'""")
+                    except:
+                        print(f"{file} failure at {line[0]}; {line[1]}")
+
                     i += 1
                     if i % commit_batch_size == 0:
                         self.conn.commit()
                     if i % 100000 == 0:
                         print(f"{i} ohlc-lines added..")
+
                 self.conn.commit()
                 print(f"file {file} finished.")
         print(f"All files from {csv_folder} added as {pairname} values.")
@@ -271,18 +277,24 @@ class InitTools:
                                     ORDER BY fx_timestamp_id ASC LIMIT 1""")
             current_id = self.cursor.fetchall()[0][0] - 1
 
+            self.cursor.execute(f"""SELECT {pairname}_nonvalid_count FROM fx_data 
+                                    WHERE fx_timestamp_id = {current_id}""")
+            last_nonvalid_count_number = self.cursor.fetchall()[0][0]
+
             if upper_limit - current_id <= batchsize:
-                query = f"SELECT fx_timestamp_id, {pairname}_bidclose FROM fx_data " \
+                query = f"SELECT fx_timestamp_id, {pairname}_bidclose, {pairname}_nonvalid_count FROM fx_data " \
                         f"WHERE fx_timestamp_id BETWEEN {current_id} AND {upper_limit}" \
                         f"ORDER BY fx_timestamp_id ASC"
             else:
-                query = f"SELECT fx_timestamp_id, {pairname}_bidclose FROM fx_data " \
+                query = f"SELECT fx_timestamp_id, {pairname}_bidclose, {pairname}_nonvalid_count FROM fx_data " \
                         f"WHERE fx_timestamp_id BETWEEN {current_id} AND {current_id + batchsize}" \
                         f"ORDER BY fx_timestamp_id ASC"
 
             fetch = pd.read_sql_query(query, self.conn)
 
+            nan_count = last_nonvalid_count_number # MUST BE FIXED!!
             nan_count = 0
+
             for i in range(len(fetch)):
                 if np.isnan(fetch.at[i, f"{pairname}_bidclose"]):
                     nan_count += 1
@@ -322,20 +334,29 @@ class IndicatorTools:
 
         print(f"adding Columns for {pairname}..")
         self.cursor.execute(f"""ALTER TABLE fx_data
-                                    ADD COLUMN {pairname}_up_down_0 smallint,
-                                    ADD COLUMN {pairname}_rsi_6 smallint;
+                                    ADD COLUMN {pairname}_up_down_1 smallint,
+                                    ADD COLUMN {pairname}_absolute_body_size_1 NUMERIC(6,5),
+                                    ADD COLUMN {pairname}_cutler_rsi_14 double precision,
+                                    ADD COLUMN {pairname}_cutler_rsi_28 double precision,
+                                    ADD COLUMN {pairname}_cutler_rsi_56 double precision,
+                                    ADD COLUMN {pairname}_cutler_rsi_112 double precision;
                                     """)
         self.conn.commit()
         print("Columns added.")
 
         if indexing == True:
             print(f"adding Indexes on {pairname} tables..")
-            self.cursor.execute(f"""CREATE INDEX idx_{pairname}_up_down_0 on fx_data ("{pairname}_up_down_0");
+            self.cursor.execute(f"""CREATE INDEX idx_{pairname}_up_down_1 on fx_data ("{pairname}_up_down_1");
+                                    CREATE INDEX idx_{pairname}_absolute_body_size_1 on fx_data ("{pairname}_up_down_1");
+                                    CREATE INDEX idx_{pairname}_cutler_rsi_14 on fx_data ("{pairname}_cutler_rsi_14");
+                                    CREATE INDEX idx_{pairname}_cutler_rsi_28 on fx_data ("{pairname}_cutler_rsi_28");
+                                    CREATE INDEX idx_{pairname}_cutler_rsi_56 on fx_data ("{pairname}_cutler_rsi_56");
+                                    CREATE INDEX idx_{pairname}_cutler_rsi_112 on fx_data ("{pairname}_cutler_rsi_112");
                                 """)
             self.conn.commit()
             print("Indexes added.")
 
-    def fill_indicator_value(self, pairname, indicator, windowsize, batchsize):
+    def fill_indicator_value(self, pairname, indicator, n_periods, batchsize):
         '''
         Fills respective Indicator Column. Prerequisites non-empty fx rows within start and end of valid data, use
         fill_empty_fx_rows first otherwise error will be raised.
@@ -346,11 +367,11 @@ class IndicatorTools:
         :return: Filled indicator column in Database.
         '''
 
-        print(f"Start filling {pairname} {indicator} {windowsize} values")
+        print(f"Start filling {pairname} {indicator} {n_periods} values")
 
         # start point determination, 'first row of where data acutally is', lower limit
         self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
-                                AND {pairname}_{indicator}_{windowsize} IS NULL 
+                                AND {pairname}_{indicator}_{n_periods} IS NULL 
                                 ORDER BY fx_timestamp_id ASC LIMIT 1""")
         lower_limit = self.cursor.fetchall()
         if lower_limit == []:                   # check if there is actually sth to do
@@ -364,7 +385,7 @@ class IndicatorTools:
                                 ORDER BY fx_timestamp_id DESC LIMIT 1""")
         upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
 
-        start_id = lower_limit + windowsize
+        start_id = lower_limit + n_periods - 1
 
         if start_id > upper_limit:
             print("Error, filling Indicator Value not possible. Check window size and upper limit.")
@@ -384,15 +405,19 @@ class IndicatorTools:
                     id_batch = [x for x in range(current_id, current_id + batchsize + 1)]
 
                 if indicator == "up_down":
-                    indicator_value_batch = di(pairname, windowsize, id_batch).up_down()
-                elif indicator == "rsi":
-                    indicator_value_batch = di(pairname, windowsize, id_batch).rsi()
+                    indicator_value_batch = di(pairname, n_periods, id_batch).up_down()
+                elif indicator == "absolute_body_size":
+                    indicator_value_batch = di(pairname, n_periods, id_batch).absolute_body_size()
+                elif indicator == "cutler_rsi":
+                    indicator_value_batch = di(pairname, n_periods, id_batch).cutler_rsi()
                 else:
                     print("Indicator name not defined.")
 
-                for i in range(len(id_batch)):
+
+
+                for i in range(len(id_batch) - 1):
                     self.cursor.execute(f"""UPDATE fx_data SET 
-                                    {pairname}_{indicator}_{windowsize} = {indicator_value_batch[i]} 
+                                    {pairname}_{indicator}_{n_periods} = {indicator_value_batch[i]} 
                                     WHERE fx_timestamp_id = {id_batch[i]}""")
 
                 self.conn.commit()
@@ -408,9 +433,14 @@ if __name__ == "__main__":
     x = InitTools()
     y = IndicatorTools()
     # x.create_initial_table()
-    # x.timestamp_fill(start_year=2000, last_year=2000, commit_batch_size=150000)
+    # x.timestamp_fill(start_year=2001, last_year=2001, commit_batch_size=150000)
     # x.create_forex_columns("eurusd")
     # x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
     # x.fill_empty_fx_rows("eurusd", 100000)
     # y.create_indicator_columns("eurusd")
-    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", windowsize=0, batchsize=100000)
+    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", n_periods=1, batchsize=100000)
+    # y.fill_indicator_value(indicator="absolute_body_size", pairname="eurusd", n_periods=1, batchsize=100000)
+    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=14, batchsize= 100000)
+    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=28, batchsize= 100000)
+    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=56, batchsize= 100000)
+    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=112, batchsize= 100000)
