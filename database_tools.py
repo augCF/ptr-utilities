@@ -190,7 +190,8 @@ class InitTools:
                                 ADD COLUMN {pair_name}_bidhigh NUMERIC(6,5),
                                 ADD COLUMN {pair_name}_bidlow NUMERIC(6,5),
                                 ADD COLUMN {pair_name}_bidclose NUMERIC(6,5),
-                                ADD COLUMN {pair_name}_nonvalid_count integer;""")
+                                ADD COLUMN {pair_name}_nonvalid_count integer,
+                                ADD COLUMN {pair_name}_valid_id integer;""")
         self.conn.commit()
         print("Columns added.")
         if indexing == True:
@@ -200,7 +201,8 @@ class InitTools:
                     CREATE INDEX idx_{pair_name}_bidhigh on fx_data ("{pair_name}_bidhigh");
                     CREATE INDEX idx_{pair_name}_bidlow on fx_data ("{pair_name}_bidlow");
                     CREATE INDEX idx_{pair_name}_bidclose on fx_data ("{pair_name}_bidclose");
-                    CREATE INDEX idx_{pair_name}_nonvalid_count on fx_data ("{pair_name}_nonvalid_count");""")
+                    CREATE INDEX idx_{pair_name}_nonvalid_count on fx_data ("{pair_name}_nonvalid_count");
+                    CREATE INDEX idx_{pair_name}_valid_id on fx_data ("{pair_name}_valid_id");""")
             self.conn.commit()
             print("Indexes added.")
 
@@ -316,6 +318,45 @@ class InitTools:
             self.conn.commit()
         print(f"Fill empty rows procedure completed. {counter} empty {pairname} rows detected and filled with last bidclose.")
 
+    def update_valid_id(self, pairname):
+        print(f"Start updating {pairname} valid ID..")
+        print(f"fetching latest ID..")
+        try:
+            self.cursor.execute(f"""SELECT {pairname}_valid_id, fx_timestamp_id FROM fx_data WHERE {pairname}_valid_id IS NOT NULL
+                                ORDER BY fx_timestamp_id DESC LIMIT 1""")
+            fetch = self.cursor.fetchall()
+            latest_valid_id = fetch[0][0]
+            latest_timestamp_id = fetch[0][1]
+        except:
+            self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
+                                    ORDER BY fx_timestamp_id ASC LIMIT 1""")
+            latest_timestamp_id = self.cursor.fetchall()[0][0]
+            latest_valid_id = 0
+            print(f"latest valid ID not found. starting from 0 at timestamp id {latest_timestamp_id}")
+
+        self.cursor.execute(f"""SELECT fx_timestamp_id from fx_data WHERE fx_timestamp_id IS NOT NULL
+                                ORDER BY fx_timestamp_id DESC LIMIT 1""")
+
+        upper_limit = self.cursor.fetchall()[0][0]
+        print(f"upper limit: {upper_limit}")
+
+        self.cursor.execute(f"""SELECT fx_timestamp_id from fx_data WHERE {pairname}_bidopen IS NOT NULL
+                                AND fx_timestamp_id BETWEEN {latest_timestamp_id} AND {upper_limit}
+                                ORDER BY fx_timestamp_id ASC""")
+        full_id_batch = np.array(self.cursor.fetchall())[:,0]
+
+        i = 0
+        for id in full_id_batch:
+            self.cursor.execute(f"""UPDATE fx_data SET {pairname}_valid_id = {latest_valid_id + i}
+                                    WHERE fx_timestamp_id = {id}""")
+            i += 1
+            if i % 100000 == 0:
+                self.conn.commit()
+            if i % 25000 == 0:
+                print(f"""{i} valid IDs set..""")
+        self.conn.commit
+
+
 
 class IndicatorTools:
 
@@ -340,6 +381,7 @@ class IndicatorTools:
                                     ADD COLUMN {pairname}_cutler_rsi_28 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_56 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_112 double precision;
+                                    ADD COLUMN {pairname}_cutler_rsi_3000 double precision;
                                     """)
         self.conn.commit()
         print("Columns added.")
@@ -352,6 +394,7 @@ class IndicatorTools:
                                     CREATE INDEX idx_{pairname}_cutler_rsi_28 on fx_data ("{pairname}_cutler_rsi_28");
                                     CREATE INDEX idx_{pairname}_cutler_rsi_56 on fx_data ("{pairname}_cutler_rsi_56");
                                     CREATE INDEX idx_{pairname}_cutler_rsi_112 on fx_data ("{pairname}_cutler_rsi_112");
+                                    CREATE INDEX idx_{pairname}_cutler_rsi_3000 on fx_data ("{pairname}_cutler_rsi_3000");
                                 """)
             self.conn.commit()
             print("Indexes added.")
@@ -393,7 +436,6 @@ class IndicatorTools:
         else:
             from fx_indicators import DatabaseIndicators as di
 
-
             current_id = start_id
 
             while current_id <= upper_limit:
@@ -432,15 +474,18 @@ class IndicatorTools:
 if __name__ == "__main__":
     x = InitTools()
     y = IndicatorTools()
-    # x.create_initial_table()
-    # x.timestamp_fill(start_year=2001, last_year=2001, commit_batch_size=150000)
-    # x.create_forex_columns("eurusd")
-    # x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
-    # x.fill_empty_fx_rows("eurusd", 100000)
+    x.create_initial_table()
+    x.timestamp_fill(start_year=2000, last_year=2002, commit_batch_size=150000)
+    x.create_forex_columns("eurusd")
+    x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
+    x.update_valid_id("eurusd")
+    x.fill_empty_fx_rows("eurusd", 100000)
+
     # y.create_indicator_columns("eurusd")
     # y.fill_indicator_value(indicator="up_down", pairname="eurusd", n_periods=1, batchsize=100000)
     # y.fill_indicator_value(indicator="absolute_body_size", pairname="eurusd", n_periods=1, batchsize=100000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=14, batchsize= 100000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=28, batchsize= 100000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=56, batchsize= 100000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=112, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=14, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=28, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=56, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=112, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=3000, batchsize= 100000)
