@@ -109,8 +109,53 @@ class LiveIndicators:
     for element n of Array. Can be used with database, too. For filling database with Indicator values, utilize
     Indicators from DatabaseIndicators (better speed / performance).
     '''
-    def __init__(self):
-        pass
+    def __init__(self, ohlc_batch):
+        self.ohlc_batch = ohlc_batch
+
+    def up_down(self):
+        output = []
+        for candle in self.ohlc_batch:
+            if candle[0] > candle[3]:
+                output.append(0)
+            elif candle[0] == candle[3]:
+                output.append(1)
+            elif candle[0] < candle[3]:
+                output.append(2)
+        return output
+
+    def absoulte_body_size(self):
+        output = []
+        for candle in self.ohlc_batch:
+            output.append(np.around(abs(candle[0] - candle[1]), decimals=5))
+        return output
+
+    def cutler_rsi(self, n_periods):
+        output = [x*0 for x in range(n_periods - 1)]
+        current_candle_pos = len(self.ohlc_batch) - 1 # because len gives 'whole' len which is 1 too much
+        while current_candle_pos >= n_periods - 1:
+            ups = 0
+            downs = 0
+            current_candle = self.ohlc_batch[current_candle_pos]
+            for i in range(n_periods):
+                j = current_candle_pos - i
+                if self.ohlc_batch[j][0] > self.ohlc_batch[j][3]:
+                    downs += self.ohlc_batch[j][0] - self.ohlc_batch[j][3]
+                elif self.ohlc_batch[j][0] < self.ohlc_batch[j][3]:
+                    ups += self.ohlc_batch[j][3] - self.ohlc_batch[j][0]
+            if downs == 0:
+                rsi = 100
+            else:
+                ups /= n_periods
+                downs /= n_periods
+                rs = ups / downs
+                rsi = 100-(100 / (1 + rs))
+            output.append(float(np.around(rsi, decimals=3)))
+            current_candle_pos -= 1
+        return output
+
+
+
+
 
 
 if __name__ == "__main__":
