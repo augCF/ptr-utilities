@@ -250,7 +250,6 @@ class InitTools:
         self.cursor.execute("REINDEX TABLE fx_data")
         print("reindexing finished.")
 
-
     def fill_empty_fx_rows(self, pairname, batchsize):
         '''
 
@@ -294,17 +293,17 @@ class InitTools:
 
             fetch = pd.read_sql_query(query, self.conn)
 
-            nan_count = last_nonvalid_count_number # MUST BE FIXED!!
+            nan_count = last_nonvalid_count_number  # MUST BE FIXED!!
             nan_count = 0
 
             for i in range(len(fetch)):
                 if np.isnan(fetch.at[i, f"{pairname}_bidclose"]):
                     nan_count += 1
                     self.cursor.execute(f"""UPDATE fx_data SET 
-                                            {pairname}_bidopen = {fetch.at[i - nan_count,f"{pairname}_bidclose"]},
-                                            {pairname}_bidhigh = {fetch.at[i - nan_count,f"{pairname}_bidclose"]},
-                                            {pairname}_bidlow = {fetch.at[i - nan_count,f"{pairname}_bidclose"]},
-                                            {pairname}_bidclose = {fetch.at[i - nan_count,f"{pairname}_bidclose"]},
+                                            {pairname}_bidopen = {fetch.at[i - nan_count, f"{pairname}_bidclose"]},
+                                            {pairname}_bidhigh = {fetch.at[i - nan_count, f"{pairname}_bidclose"]},
+                                            {pairname}_bidlow = {fetch.at[i - nan_count, f"{pairname}_bidclose"]},
+                                            {pairname}_bidclose = {fetch.at[i - nan_count, f"{pairname}_bidclose"]},
                                             {pairname}_nonvalid_count = {nan_count}
                                             WHERE fx_timestamp_id = {fetch.at[i, "fx_timestamp_id"]}""")
                     counter += 1
@@ -316,13 +315,15 @@ class InitTools:
                     break
             print(f"current id: {current_id}. {upper_limit - current_id} left.")
             self.conn.commit()
-        print(f"Fill empty rows procedure completed. {counter} empty {pairname} rows detected and filled with last bidclose.")
+        print(
+            f"Fill empty rows procedure completed. {counter} empty {pairname} rows detected and filled with last bidclose.")
 
     def update_valid_id(self, pairname):
         print(f"Start updating {pairname} valid ID..")
         print(f"fetching latest ID..")
         try:
-            self.cursor.execute(f"""SELECT {pairname}_valid_id, fx_timestamp_id FROM fx_data WHERE {pairname}_valid_id IS NOT NULL
+            self.cursor.execute(
+                f"""SELECT {pairname}_valid_id, fx_timestamp_id FROM fx_data WHERE {pairname}_valid_id IS NOT NULL
                                 ORDER BY fx_timestamp_id DESC LIMIT 1""")
             fetch = self.cursor.fetchall()
             latest_valid_id = fetch[0][0]
@@ -343,7 +344,7 @@ class InitTools:
         self.cursor.execute(f"""SELECT fx_timestamp_id from fx_data WHERE {pairname}_bidopen IS NOT NULL
                                 AND fx_timestamp_id BETWEEN {latest_timestamp_id} AND {upper_limit}
                                 ORDER BY fx_timestamp_id ASC""")
-        full_id_batch = np.array(self.cursor.fetchall())[:,0]
+        full_id_batch = np.array(self.cursor.fetchall())[:, 0]
 
         i = 0
         for id in full_id_batch:
@@ -355,7 +356,6 @@ class InitTools:
             if i % 25000 == 0:
                 print(f"""{i} valid IDs set..""")
         self.conn.commit
-
 
 
 class IndicatorTools:
@@ -380,7 +380,7 @@ class IndicatorTools:
                                     ADD COLUMN {pairname}_cutler_rsi_14 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_28 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_56 double precision,
-                                    ADD COLUMN {pairname}_cutler_rsi_112 double precision;
+                                    ADD COLUMN {pairname}_cutler_rsi_112 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_3000 double precision;
                                     """)
         self.conn.commit()
@@ -417,74 +417,66 @@ class IndicatorTools:
                                 AND {pairname}_{indicator}_{n_periods} IS NULL 
                                 ORDER BY fx_timestamp_id ASC LIMIT 1""")
         lower_limit = self.cursor.fetchall()
-        if lower_limit == []:                   # check if there is actually sth to do
+
+        if lower_limit == []:  # check if there is actually sth to do
             print("already finished, nothing to fill")
             return None
         else:
-            lower_limit = lower_limit[0][0]     # -> Because fetchall outputs sth. like this: [(blabla,)]
+            lower_limit = lower_limit[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
 
         # end point determination, 'last row where data actually is', upper limit
         self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE {pairname}_bidopen IS NOT NULL
                                 ORDER BY fx_timestamp_id DESC LIMIT 1""")
         upper_limit = self.cursor.fetchall()[0][0]  # -> Because fetchall outputs sth. like this: [(blabla,)]
 
-        start_id = lower_limit + n_periods - 1
+        self.cursor.execute(f"""SELECT {pairname}_valid_id FROM fx_data 
+                                WHERE fx_timestamp_id BETWEEN {lower_limit} AND {upper_limit}
+                                AND {pairname}_valid_id IS NOT NULL 
+                                ORDER BY fx_timestamp_id ASC""")
 
-        if start_id > upper_limit:
-            print("Error, filling Indicator Value not possible. Check window size and upper limit.")
+        full_id_batch = np.array(self.cursor.fetchall())[:, 0]
+        commit_id_batch = full_id_batch[n_periods-1:] # all IDs minus len of n_periods
+
+        if len(full_id_batch) < n_periods:
+            print("Check window size and upper limit!!")
 
         else:
             from fx_indicators import DatabaseIndicators as di
 
-            current_id = start_id
+            if indicator == "up_down":
+                indicator_value_batch = di(pairname, n_periods, commit_id_batch).up_down()
+            elif indicator == "absolute_body_size":
+                indicator_value_batch = di(pairname, n_periods, commit_id_batch).absolute_body_size()
+            elif indicator == "cutler_rsi":
+                indicator_value_batch = di(pairname, n_periods, commit_id_batch).cutler_rsi()
+            else:
+                print("Indicator name not defined.")
 
-            while current_id <= upper_limit:
-
-                if upper_limit - current_id <= batchsize:
-                    id_batch = [x for x in range(current_id, upper_limit + 1)]
-                    print("reaching end...")
-                else:
-                    id_batch = [x for x in range(current_id, current_id + batchsize + 1)]
-
-                if indicator == "up_down":
-                    indicator_value_batch = di(pairname, n_periods, id_batch).up_down()
-                elif indicator == "absolute_body_size":
-                    indicator_value_batch = di(pairname, n_periods, id_batch).absolute_body_size()
-                elif indicator == "cutler_rsi":
-                    indicator_value_batch = di(pairname, n_periods, id_batch).cutler_rsi()
-                else:
-                    print("Indicator name not defined.")
-
-
-
-                for i in range(len(id_batch) - 1):
-                    self.cursor.execute(f"""UPDATE fx_data SET 
-                                    {pairname}_{indicator}_{n_periods} = {indicator_value_batch[i]} 
-                                    WHERE fx_timestamp_id = {id_batch[i]}""")
-
-                self.conn.commit()
-                print(f"current id: {current_id}. {upper_limit - current_id} left..")
-                current_id += batchsize
-
+            for i in range(len(commit_id_batch)):
+                self.cursor.execute(f"""UPDATE fx_data SET
+                                        {pairname}_{indicator}_{n_periods} = {indicator_value_batch[i]}
+                                        WHERE {pairname}_valid_id = {commit_id_batch[i]}""")
+                if i % batchsize == 0:
+                    self.conn.commit()
             self.conn.commit()
-            print(f"Indicator {indicator} for {pairname} finished.")
+            print("finished.")
 
 
 
 if __name__ == "__main__":
     x = InitTools()
     y = IndicatorTools()
-    x.create_initial_table()
-    x.timestamp_fill(start_year=2000, last_year=2002, commit_batch_size=150000)
-    x.create_forex_columns("eurusd")
-    x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
-    x.update_valid_id("eurusd")
-    x.fill_empty_fx_rows("eurusd", 100000)
+    # x.create_initial_table()
+    # x.timestamp_fill(start_year=2000, last_year=2002, commit_batch_size=150000)
+    # x.create_forex_columns("eurusd")
+    # x.update_raw_fx_data(pairname="eurusd", csv_folder="C://Users//Chris//Desktop//ptr-utilities//datasets//eurusd")
+    # x.update_valid_id("eurusd")
+    # x.fill_empty_fx_rows("eurusd", 100000)
 
     # y.create_indicator_columns("eurusd")
-    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", n_periods=1, batchsize=100000)
-    # y.fill_indicator_value(indicator="absolute_body_size", pairname="eurusd", n_periods=1, batchsize=100000)
-    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=14, batchsize= 100000)
+    # y.fill_indicator_value(indicator="up_down", pairname="eurusd", n_periods=1, batchsize=10000)
+    # y.fill_indicator_value(indicator="absolute_body_size", pairname="eurusd", n_periods=1, batchsize=10000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=14, batchsize= 10000)
     # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=28, batchsize= 100000)
     # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=56, batchsize= 100000)
     # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=112, batchsize= 100000)
