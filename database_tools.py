@@ -377,11 +377,24 @@ class IndicatorTools:
         self.cursor.execute(f"""ALTER TABLE fx_data
                                     ADD COLUMN {pairname}_up_down_1 smallint,
                                     ADD COLUMN {pairname}_absolute_body_size_1 NUMERIC(6,5),
+                                    ADD COLUMN {pairname}_dmi_1 double precision,
+                                    ADD COLUMN {pairname}_adx_14 double precision,
+                                    ADD COLUMN {pairname}_adx_28 double precision,
+                                    ADD COLUMN {pairname}_adx_56 double precision,
+                                    ADD COLUMN {pairname}_adx_112 double precision,
+                                    ADD COLUMN {pairname}_adx_224 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_14 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_28 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_56 double precision,
                                     ADD COLUMN {pairname}_cutler_rsi_112 double precision,
-                                    ADD COLUMN {pairname}_cutler_rsi_3000 double precision;
+                                    ADD COLUMN {pairname}_cutler_rsi_224 double precision,
+                                    ADD COLUMN {pairname}_sma_oc_14 double precision,
+                                    ADD COLUMN {pairname}_sma_oc_28 double precision,
+                                    ADD COLUMN {pairname}_sma_oc_56 double precision,
+                                    ADD COLUMN {pairname}_sma_oc_112 double precision,
+                                    ADD COLUMN {pairname}_sma_oc_224 double precision;
+
+                                    ;
                                     """)
         self.conn.commit()
         print("Columns added.")
@@ -390,11 +403,22 @@ class IndicatorTools:
             print(f"adding Indexes on {pairname} tables..")
             self.cursor.execute(f"""CREATE INDEX idx_{pairname}_up_down_1 on fx_data ("{pairname}_up_down_1");
                                     CREATE INDEX idx_{pairname}_absolute_body_size_1 on fx_data ("{pairname}_up_down_1");
+                                    CREATE INDEX idx_{pairname}_dmi_1 on fx_data ("{pairname}_dmi_1");
+                                    CREATE INDEX idx_{pairname}_adx_14 on fx_data ("{pairname}_adx_14");
+                                    CREATE INDEX idx_{pairname}_adx_28 on fx_data ("{pairname}_adx_14");
+                                    CREATE INDEX idx_{pairname}_adx_56 on fx_data ("{pairname}_adx_14");
+                                    CREATE INDEX idx_{pairname}_adx_112 on fx_data ("{pairname}_adx_14");
+                                    CREATE INDEX idx_{pairname}_adx_224 on fx_data ("{pairname}_adx_14");
                                     CREATE INDEX idx_{pairname}_cutler_rsi_14 on fx_data ("{pairname}_cutler_rsi_14");
                                     CREATE INDEX idx_{pairname}_cutler_rsi_28 on fx_data ("{pairname}_cutler_rsi_28");
                                     CREATE INDEX idx_{pairname}_cutler_rsi_56 on fx_data ("{pairname}_cutler_rsi_56");
                                     CREATE INDEX idx_{pairname}_cutler_rsi_112 on fx_data ("{pairname}_cutler_rsi_112");
-                                    CREATE INDEX idx_{pairname}_cutler_rsi_3000 on fx_data ("{pairname}_cutler_rsi_3000");
+                                    CREATE INDEX idx_{pairname}_cutler_rsi_224 on fx_data ("{pairname}_cutler_rsi_224");
+                                    CREATE INDEX idx_{pairname}_sma_oc_14 on fx_data ("{pairname}_sma_oc_14");
+                                    CREATE INDEX idx_{pairname}_sma_oc_28 on fx_data ("{pairname}_sma_oc_28");
+                                    CREATE INDEX idx_{pairname}_sma_oc_56 on fx_data ("{pairname}_sma_oc_56");
+                                    CREATE INDEX idx_{pairname}_sma_oc_112 on fx_data ("{pairname}_sma_oc_112");
+                                    CREATE INDEX idx_{pairname}_sma_oc_224 on fx_data ("{pairname}_sma_oc_224");
                                 """)
             self.conn.commit()
             print("Indexes added.")
@@ -449,8 +473,16 @@ class IndicatorTools:
                 indicator_value_batch = di(pairname, n_periods, commit_id_batch).absolute_body_size()
             elif indicator == "cutler_rsi":
                 indicator_value_batch = di(pairname, n_periods, commit_id_batch).cutler_rsi()
+            elif indicator == "sma_oc":
+                indicator_value_batch = di(pairname, n_periods, commit_id_batch).sma_oc()
+            elif indicator == "dmi":
+                indicator_value_batch = di(pairname, n_periods, commit_id_batch).dmi()
+            elif indicator == "adx":
+                indicator_value_batch = di(pairname, n_periods, commit_id_batch).adx()
             else:
                 print("Indicator name not defined.")
+
+
 
             for i in range(len(commit_id_batch)):
                 self.cursor.execute(f"""UPDATE fx_data SET
@@ -458,8 +490,174 @@ class IndicatorTools:
                                         WHERE {pairname}_valid_id = {commit_id_batch[i]}""")
                 if i % batchsize == 0:
                     self.conn.commit()
+
+                if i % 100000 == 0:
+                    print(f"{i} lines filled..")
             self.conn.commit()
             print("finished.")
+
+    def create_target_columns(self, pairname="eurusd", indexing=True):
+        print(f"adding Columns for {pairname}..")
+        self.cursor.execute(f"""ALTER TABLE fx_data
+                                    ADD COLUMN {pairname}_target_50_above SMALLINT,
+                                    ADD COLUMN {pairname}_target_50_below SMALLINT,
+                                    ADD COLUMN {pairname}_target_80_above SMALLINT,
+                                    ADD COLUMN {pairname}_target_80_below SMALLINT,
+                                    ADD COLUMN {pairname}_target_130_above SMALLINT,
+                                    ADD COLUMN {pairname}_target_130_below SMALLINT,
+                                    ADD COLUMN {pairname}_target_200_above SMALLINT,
+                                    ADD COLUMN {pairname}_target_200_below SMALLINT,
+                                    ADD COLUMN {pairname}_target_300_above SMALLINT,
+                                    ADD COLUMN {pairname}_target_300_below SMALLINT;
+                                    """)
+        self.conn.commit()
+        print("Columns added.")
+
+        if indexing == True:
+            print(f"adding Indexes on {pairname} tables..")
+            self.cursor.execute(f"""CREATE INDEX idx_{pairname}_target_50_above on fx_data ("{pairname}_target_50_above");
+                                    CREATE INDEX idx_{pairname}_target_50_below on fx_data ("{pairname}_target_50_below");
+                                    CREATE INDEX idx_{pairname}_target_80_above on fx_data ("{pairname}_target_80_above");
+                                    CREATE INDEX idx_{pairname}_target_80_below on fx_data ("{pairname}_target_80_below");
+                                    CREATE INDEX idx_{pairname}_target_130_above on fx_data ("{pairname}_target_130_above");
+                                    CREATE INDEX idx_{pairname}_target_130_below on fx_data ("{pairname}_target_130_below");
+                                    CREATE INDEX idx_{pairname}_target_200_above on fx_data ("{pairname}_target_200_above");
+                                    CREATE INDEX idx_{pairname}_target_200_below on fx_data ("{pairname}_target_200_below");
+                                    CREATE INDEX idx_{pairname}_target_300_above on fx_data ("{pairname}_target_300_above");
+                                    CREATE INDEX idx_{pairname}_target_300_below on fx_data ("{pairname}_target_300_below");
+                                """)
+            self.conn.commit()
+            print("Indexes added.")
+
+
+    def fill_target_values(self, pairname, movement):
+
+        pipsize = 1/10000
+
+        self.cursor.execute(f"""SELECT {pairname}_valid_id FROM fx_data 
+                                WHERE {pairname}_valid_id IS NOT NULL
+                                ORDER BY fx_timestamp_id DESC LIMIT 1""")
+        upper_limit = self.cursor.fetchall()[0][0]
+        upper_limit -= 15000
+
+        self.cursor.execute(f"""SELECT {pairname}_valid_id FROM fx_data WHERE 
+                                    {pairname}_target_{movement}_above IS NOT NULL AND
+                                    {pairname}_valid_id >= 0
+                                    ORDER BY fx_timestamp_id DESC LIMIT 1""")
+        fetch = self.cursor.fetchall()
+
+        stop = False
+        if fetch == []:
+            current_id = 0
+        elif fetch[0][0] >= upper_limit:
+            print(f"targets {movement} for {pairname} already determined.")
+            stop = True
+        else:
+            current_id = fetch[0][0]
+
+        if stop == False:
+
+            print(f"Starting determining Target {movement} for {pairname}..")
+            while current_id <= upper_limit:
+                self.cursor.execute(f"""SELECT  {pairname}_valid_id, 
+                                                {pairname}_bidopen, 
+                                                {pairname}_bidhigh, 
+                                                {pairname}_bidlow,
+                                                {pairname}_bidclose
+                                        FROM fx_data WHERE {pairname}_valid_id BETWEEN 
+                                                {current_id} AND 
+                                                {current_id + 100000}
+                                        ORDER BY fx_timestamp_id ASC""")
+                big_fetch = np.array(self.cursor.fetchall(), dtype=np.float)
+                found_values = []
+                unknown_values = []
+                for i in range(50000):
+                    avg_price = np.sum(big_fetch[i][1:5]) / 4
+                    movement_up = avg_price + (movement * pipsize)
+                    movement_down = avg_price - (movement * pipsize)
+                    back_to_i_loop = False
+                    j = 0
+                    while back_to_i_loop == False:
+                        if big_fetch[j][2] >= movement_up: # up hit
+                            found_values.append([int(big_fetch[i][0]), 1, 0])
+                            back_to_i_loop = True
+                        elif big_fetch[j][3] <= movement_down: # down hit
+                            found_values.append([int(big_fetch[i][0]), 0, 1])
+                            back_to_i_loop = True
+                        elif j == len(big_fetch) - 1:
+                            unknown_values.append(int(big_fetch[i][0]))
+                            back_to_i_loop = True
+                        else:
+                            j += 1
+                print(f"found values: {len(found_values)}. unknown: {len(unknown_values)}. Between: {current_id} and {current_id + 50000}")
+
+                for element in found_values:
+                    self.cursor.execute(f"""UPDATE fx_data SET
+                                                    {pairname}_target_{movement}_above = {element[1]}
+                                                    WHERE {pairname}_valid_id = {element[0]}""")
+                    self.cursor.execute(f"""UPDATE fx_data SET
+                                                    {pairname}_target_{movement}_below = {element[2]}
+                                                    WHERE {pairname}_valid_id = {element[0]}""")
+                self.conn.commit()
+
+                for element in unknown_values:
+                    self.cursor.execute(f"""SELECT  {pairname}_bidopen, 
+                                                    {pairname}_bidhigh, 
+                                                    {pairname}_bidlow,
+                                                    {pairname}_bidclose
+                                            FROM fx_data WHERE {pairname}_valid_id = {element}""")
+                    avg_price = np.sum(np.array(self.cursor.fetchall(), dtype=np.float)) / 4
+
+                    self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE 
+                                                    {pairname}_bidhigh >= {avg_price + (movement * pipsize)}
+                                                    AND 
+                                                    {pairname}_valid_id > {element} 
+                                                    ORDER BY fx_timestamp_id ASC LIMIT 1""")
+
+                    fetch = self.cursor.fetchall()
+                    if fetch == []:
+                        hit_above = 15000001
+                    else:
+                        hit_above = fetch[0][0]
+
+                    self.cursor.execute(f"""SELECT fx_timestamp_id FROM fx_data WHERE 
+                                                    {pairname}_bidlow <= {avg_price - (movement * pipsize)}
+                                                    AND 
+                                                    {pairname}_valid_id > {element}
+                                                    ORDER BY fx_timestamp_id ASC LIMIT 1""")
+                    fetch = self.cursor.fetchall()
+                    if fetch == []:
+                        hit_below = 15000001
+                    else:
+                        hit_below = fetch[0][0]
+
+                    if hit_above < hit_below:
+                        self.cursor.execute(f"""UPDATE fx_data SET {pairname}_target_{movement}_above = 1
+                                                WHERE {pairname}_valid_id = {current_id};
+                                                UPDATE fx_data SET {pairname}_target_{movement}_below = 0
+                                                WHERE {pairname}_valid_id = {element};""")
+                    elif hit_above > hit_below:
+                        self.cursor.execute(f"""UPDATE fx_data SET {pairname}_target_{movement}_above = 0
+                                                WHERE {pairname}_valid_id = {current_id};
+                                                UPDATE fx_data SET {pairname}_target_{movement}_below = 1
+                                                WHERE {pairname}_valid_id = {element};""")
+                    elif hit_above == hit_below:
+                        print(f"no relevant movement found at {current_id}")
+                        self.cursor.execute(f"""UPDATE fx_data SET {pairname}_target_{movement}_above = 1
+                                                WHERE {pairname}_valid_id = {current_id};
+                                                UPDATE fx_data SET {pairname}_target_{movement}_below = 0
+                                                WHERE {pairname}_valid_id = {element};""")
+                    self.conn.commit()
+
+                current_id += 50000
+
+                print(f"target determination {movement}, current id: {current_id}")
+
+
+
+
+
+
 
 
 
@@ -476,8 +674,22 @@ if __name__ == "__main__":
     # y.create_indicator_columns("eurusd")
     # y.fill_indicator_value(indicator="up_down", pairname="eurusd", n_periods=1, batchsize=10000)
     # y.fill_indicator_value(indicator="absolute_body_size", pairname="eurusd", n_periods=1, batchsize=100000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=14, batchsize= 10000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=28, batchsize= 100000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=56, batchsize= 100000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=112, batchsize= 100000)
-    y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=3000, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=14, batchsize= 10000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=28, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=56, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=112, batchsize= 100000)
+    # y.fill_indicator_value(indicator="cutler_rsi", pairname="eurusd", n_periods=224, batchsize= 100000)
+    # y.create_target_columns()
+    # y.fill_target_values("eurusd", 50)
+    # y.fill_indicator_value(indicator="sma_oc", pairname="eurusd", n_periods=14, batchsize=100000)
+    # y.fill_indicator_value(indicator="sma_oc", pairname="eurusd", n_periods=28, batchsize=100)
+    # y.fill_indicator_value(indicator="sma_oc", pairname="eurusd", n_periods=56, batchsize=100)
+    # y.fill_indicator_value(indicator="sma_oc", pairname="eurusd", n_periods=112, batchsize=100)
+    # y.fill_indicator_value(indicator="sma_oc", pairname="eurusd", n_periods=224, batchsize=100)
+    # y.fill_indicator_value(indicator="dmi", pairname="eurusd", n_periods=1, batchsize=1000)
+    y.fill_indicator_value(indicator="adx", pairname="eurusd", n_periods=14, batchsize=200000)
+    y.fill_indicator_value(indicator="adx", pairname="eurusd", n_periods=28, batchsize=200000)
+    y.fill_indicator_value(indicator="adx", pairname="eurusd", n_periods=56, batchsize=200000)
+    y.fill_indicator_value(indicator="adx", pairname="eurusd", n_periods=112, batchsize=200000)
+    y.fill_indicator_value(indicator="adx", pairname="eurusd", n_periods=224, batchsize=200000)
+
