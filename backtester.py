@@ -58,6 +58,7 @@ class Backtest:
     def update_order_list(self):
         # first, update all order values and sort the list (best = highest)
         # second, check if orders shall be closed because of tp or sl
+        self.equity = self.balance
         market_price = self.ohlc.sum() / 4
         orders_to_be_closed = ()
         for i in range(self.max_open_orders):
@@ -75,6 +76,7 @@ class Backtest:
                     orders_to_be_closed += (i,)
                 elif self.ohlc[1] >= self.orderlist[i][4]:  # if current high is higher than stop loss
                     orders_to_be_closed += (i,)
+            self.equity += self.orderlist[i][5]
 
         # third, close all identified tp/sl orders
         if len(orders_to_be_closed) > 0:
@@ -99,16 +101,19 @@ class Backtest:
         # SWAPS MUST BE CORRECTLY CALCULATED. THIS IS JUST A PLACEHOLDER.
 
     def close_order(self, order_number):
-        close_price = np.around(np.random.uniform(self.next_ohlc[1], self.next_ohlc[2]), 5)
-        if self.orderlist[order_number][0] == 1:  # "b"
-            close_value = np.around((self.orderlist[order_number][2] - close_price) * \
-                                    self.orderlist[order_number][1] * 1 / self.pipsize, 2)
-        elif self.orderlist[order_number][0] == 2:
-            close_value = np.around((close_price - self.orderlist[order_number][2]) * \
-                                    self.orderlist[order_number][1] * 1 / self.pipsize, 2)
-        self.balance += close_value
-        self.orderlist[order_number] = np.zeros(7)
-        self.number_of_open_orders -= 1
+        if self.orderlist[order_number][0] == 0:
+            pass
+        else:
+            close_price = np.around(np.random.uniform(self.next_ohlc[1], self.next_ohlc[2]), 5)
+            if self.orderlist[order_number][0] == 2:  # "s"
+                close_value = np.around((self.orderlist[order_number][2] - close_price) * \
+                                        self.orderlist[order_number][1] * 1 / self.pipsize, 2)
+            elif self.orderlist[order_number][0] == 1:
+                close_value = np.around((close_price - self.orderlist[order_number][2]) * \
+                                        self.orderlist[order_number][1] * 1 / self.pipsize, 2)
+            self.balance += close_value + self.orderlist[order_number][6]
+            self.orderlist[order_number] = np.zeros(7)
+            self.number_of_open_orders -= 1
 
 
     def RunBacktest(self, start_id, end_id, strategy):
@@ -145,9 +150,9 @@ class Backtest:
             decision = strategy.decide(minute_bar_array_to_evaluate, self.equity, self.balance)
 
             if decision == "b":
-                self.open_order("b", 0.01, 100, 100)
+                self.open_order("b", 0.01, 30, 600)
             if decision == "s":
-                self.open_order("s", 0.01, 100, 100)
+                self.open_order("s", 0.01, 30, 9999999999)
             if decision == "n":
                 pass
             if decision == "c":
@@ -155,14 +160,14 @@ class Backtest:
                     self.close_order(i)
 
             ff_id += 1
-            if ff_id % 5000 == 0:
-                print(f"balance: {np.around(self.balance, 2)}")
+            if ff_id % 14400 == 0:
+                print(f"balance: {np.around(self.balance, 2)}    equity: {np.around(self.equity, 2)}")
 
 
 if __name__ == "__main__":
-    x = Backtest(5)
+    x = Backtest(10)
     x.equity = 1000
     x.balance = 1000
     strategy = Teststrategy()
     print(strategy.x_width)
-    x.RunBacktest(4000000, 5000000, strategy)
+    x.RunBacktest(2000000, 5000000, strategy)
