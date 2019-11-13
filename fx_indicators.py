@@ -95,7 +95,74 @@ class DatabaseIndicators:
 
         return output
 
-    def simple_moving_average(self):
+    def dmi(self):
+        if self.valid_ids[0] == 0:
+            self.cursor.execute(f"""SELECT {self.pairname}_bidhigh, 
+                                           {self.pairname}_bidlow, 
+                                           {self.pairname}_bidclose FROM fx_data
+                                WHERE {self.pairname}_valid_id BETWEEN {self.valid_ids[0] - self.n_periods}
+                                AND {self.valid_ids[-1]}
+                                ORDER BY fx_timestamp_id ASC""")
+            fetch = np.array(self.cursor.fetchall(), dtype=np.float)
+            output = [0.0]
+        elif self.valid_ids[0] >= 0:
+            self.cursor.execute(f"""SELECT {self.pairname}_bidhigh, 
+                                           {self.pairname}_bidlow, 
+                                           {self.pairname}_bidclose FROM fx_data
+                                WHERE {self.pairname}_valid_id BETWEEN {self.valid_ids[0] - 1 - self.n_periods}
+                                AND {self.valid_ids[-1]}
+                                ORDER BY fx_timestamp_id ASC""")
+            fetch = np.array(self.cursor.fetchall(), dtype=np.float)
+            output = []
+
+        for i in range(1, len(fetch)-1):
+            pdm = fetch[i][0] - fetch[i-1][0] if fetch[i][0] - fetch[i-1][0] > 0 else 0
+            ndm = fetch[i][1] - fetch[i-1][1] if fetch[i][1] - fetch[i-1][1] > 0 else 0
+            tr = max(
+                abs(fetch[i][0] - fetch[i][1]),
+                abs(fetch[i-1][2] - fetch[i][0]),
+                abs(fetch[i-1][2] - fetch[i][1])
+                    )
+            if tr == 0:
+                dmi = 0
+            else:
+                pdi = pdm / tr
+                ndi = ndm / tr
+                if pdi + ndi == 0:
+                    dmi = 0
+                else:
+                    dmi = abs((pdi - ndi) / (pdi + ndi))
+            output.append(np.float(np.around(dmi, 5)))
+        return np.array(output, dtype=np.float)
+
+
+
+    def sma_oc(self):
+
+        self.cursor.execute(f"""SELECT {self.pairname}_bidopen, {self.pairname}_bidclose FROM fx_data
+                            WHERE {self.pairname}_valid_id BETWEEN {self.valid_ids[0] - self.n_periods}
+                            AND {self.valid_ids[-1]}
+                            ORDER BY fx_timestamp_id ASC""")
+        fetch = np.array(self.cursor.fetchall(), dtype=np.float)
+        output = []
+        for i in range(len(fetch) - (self.n_periods - 1)):
+            output.append(np.around(fetch[i:i + self.n_periods].mean(), 5))
+        return output
+
+    def adx(self):
+        self.cursor.execute(f"""SELECT {self.pairname}_dmi_1 FROM fx_data
+                            WHERE {self.pairname}_valid_id BETWEEN {self.valid_ids[0] - self.n_periods}
+                            AND {self.valid_ids[-1]}
+                            ORDER BY fx_timestamp_id ASC""")
+        fetch = np.array(self.cursor.fetchall(), dtype=np.float)
+        output = np.empty(len(fetch) - (self.n_periods - 1))
+        for i in range(len(fetch) - (self.n_periods - 1)):
+            output[i] = fetch[i:i + self.n_periods].mean()
+        return np.around(output, 3)
+
+
+
+    def psar(self):
         pass
 
 
